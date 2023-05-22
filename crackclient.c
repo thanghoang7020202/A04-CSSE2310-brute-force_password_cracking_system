@@ -13,6 +13,11 @@
 #define MAX_ARGS 3
 #define MIN_ARGS 2
 
+typedef struct argv {
+    char* port;
+    int fdJobfile;
+} argv_t;
+
 void exit_status_one() {
     fprintf(stderr, "Usage: crackclient portnum [jobfile]\n");
     exit(1);
@@ -33,31 +38,41 @@ void exit_status_four() {
     exit(4);
 }
 
-void argument_checker(int argc, char** argv){
+argv_t argument_checker(int argc, char** argv){
+    argv_t args;
+    args.port = argv[1];
+    args.fdJobfile = -1;
     // there are at least 2 arguments (./crackclient portnum) 
     // and at most 3 arguments (./crackclient portnum jobfile)
     if (argc < MIN_ARGS || argc > MAX_ARGS) { 
         exit_status_one();
     }
     if (argc == 3) {
-        FILE* jobfile = fopen(argv[2], "r");
-        if (jobfile == NULL) {
+        stdin = freopen(argv[2], "r", stdin);
+        
+        if (stdin == NULL) {
+            //error in opening jobfile
             exit_status_two(argv[2]);
         }
-        fclose(jobfile);
+        //args.fdJobfile = fdjobfile;
     }
-    return;
+    return args;
 }
 
-void write_to_server(FILE* to) {
+int write_to_server(FILE* to) {
     char buffer[80];
-    if (fgets(buffer, 79, stdin) == NULL 
-    || buffer[0] == '#' || buffer[0] == '\n') {
-        continue;
+    for (;1;) {
+        if (fgets(buffer, 79, stdin) != NULL) {
+            if (buffer[0] == '#' || buffer[0] == 0 || buffer[0] == '\n') {
+                continue; // run again
+            }
+            fprintf(to, "%s", buffer);
+            fflush(to);
+            return 0; // run again
+        }
+        return 1;
     }
-    fprintf(to, "%s", buffer);
-    fflush(to);
-    return; 
+    // break the loop (close the connection)
 }
 
 int read_from_server(FILE* from) {
@@ -65,17 +80,17 @@ int read_from_server(FILE* from) {
     int ifEoF = 0;
     if(fgets(buffer, 89, from) == NULL) {
             ifEoF = 1;
-            break;
-        };
+            return ifEoF;
+    };
     if (strcmp(buffer, ":invalid\n") == 0) {
         printf("Error in command\n");
         fflush(stdout);
-        continue;
+        return ifEoF;
     }
     if (strcmp(buffer, ":failed\n") == 0) {
         printf("Unable to decrypt\n");
         fflush(stdout);
-        continue;
+        return ifEoF;
     }
     printf("%s", buffer);
     fflush(stdout);
@@ -83,16 +98,15 @@ int read_from_server(FILE* from) {
 }
 
 int main(int argc, char** argv) {
-    argument_checker(argc,argv);
+    argv_t args = argument_checker(argc,argv);
 
-    const char* port=argv[1];
     struct addrinfo* ai = 0;
     struct addrinfo hints;
     memset(& hints, 0, sizeof(struct addrinfo));
     hints.ai_family=AF_INET;        // IPv4, for generic could use AF_UNSPEC
     hints.ai_socktype=SOCK_STREAM;
     int err;
-    if ((err=getaddrinfo("localhost", port, &hints, &ai))) {
+    if ((err=getaddrinfo("localhost", args.port, &hints, &ai))) {
         freeaddrinfo(ai);
         fprintf(stderr, "%s\n", gai_strerror(err));
         return 1;   // could not work out the address
@@ -100,8 +114,7 @@ int main(int argc, char** argv) {
 
     int fd=socket(AF_INET, SOCK_STREAM, 0); // 0 == use default protocol
     if (connect(fd, ai->ai_addr, sizeof(struct sockaddr))) {
-        perror("Connecting");
-        return 3;
+        exit_status_three(args.port);
     }
     // fd is now connected
     // we want separate streams (which we can close independently)
@@ -111,21 +124,22 @@ int main(int argc, char** argv) {
     FILE* from=fdopen(fd2, "r");
 
     if (argc == MAX_ARGS) {
-        int jobfile = open(argv[2], O_RDONLY);
-        dup2(jobfile, STDIN_FILENO);
+        //dup2(args.fdJobfile, STDIN_FILENO);
+        
+        //close(args.fdJobfile);
     }
 
-    int ifEoF = 0;
-    for (;1;) {
+    for (; 1;) {
         //sent
-        write_to_server(to);
+        if (write_to_server(to) == 1) {
+            break;
+        }
         // received
-        ifEoF = read_from_server(from);
+        if (read_from_server(from)) {
+            exit_status_four();
+        }
     }
-    fclose(to);
+    fclose(to); // close socket
     fclose(from);
-    if (ifEoF == 1) {
-        exit_status_four();
-    }
     return 0;
 }
