@@ -123,12 +123,6 @@ int main(int argc, char** argv) {
     FILE* to=fdopen(fd, "w");
     FILE* from=fdopen(fd2, "r");
 
-    if (argc == MAX_ARGS) {
-        //dup2(args.fdJobfile, STDIN_FILENO);
-        
-        //close(args.fdJobfile);
-    }
-
     for (; 1;) {
         //sent
         if (write_to_server(to) == 1) {

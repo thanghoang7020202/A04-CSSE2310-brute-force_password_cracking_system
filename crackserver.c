@@ -14,7 +14,6 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <crypt.h>
-#include <semaphore.h>
 
 #define MAX_ARGS 7
 #define MIN_ARGS 1
@@ -25,8 +24,6 @@
 #define WORD_BUFFER_SIZE 51
 #define MAX_WORD_LEN 8
 #define CIPHERTEXT_LEN 13
-
-//sem_t sem;
 
 typedef struct CmdArg {
     unsigned int maxconnections;
@@ -41,7 +38,7 @@ typedef struct {
 
 typedef struct {
     int fd;
-    FILE* toClient;
+    FILE* clientFile;
     WordList words;
 } Client;
 
@@ -259,7 +256,7 @@ int open_listen(const char* port, int maxconnections) {
     fprintf(stderr,"%u\n", ntohs(ad.sin_port));
     fflush(stderr);
 
-    if(listen(listenfd, maxconnections) < 0) {  // Up to 10 connection requests can queue
+    if(listen(listenfd, maxconnections) < 0) { // listen for connections
         close(listenfd);
         exit_code_four(); // Could not listen on socket
     }
@@ -291,13 +288,10 @@ char* salt_extract(char** token) {
 //ref: https://stackoverflow.com/questions/9335777/crypt-r-example
 void* finder(void* resource) {
     Resource* res = (Resource*)resource;
-    //sem_wait(&sem);
     for (int i = res->start; i <= res->end; i++) {
         struct crypt_data data;
         data.initialized = 0;
         char* libPass = crypt_r(res->words.wordArray[i], res->salt, &data);
-        //fprintf(stdout,"(%s) == (%s : %s)\n", res->password, libPass, res->words.wordArray[i]);
-        //fflush(stdout);
         if (strcmp(res->password, libPass) == 0) {
             char* result = strdup(res->words.wordArray[i]);
             result = strcat(result, "\n");
@@ -306,7 +300,6 @@ void* finder(void* resource) {
             return NULL;
         }
     }
-    //sem_post(&sem);
     res->result = ":failed\n";
     return NULL;  
 }
@@ -353,7 +346,9 @@ char* brute_force_cracker(char* password, char* salt, WordList words, char* nthr
 
 char* instructionAnalysis(char* buffer, WordList* words) {
     //replace \n at the end with end of string
-    buffer[strlen(buffer)-1] = '\0';
+    if(buffer != NULL && !strcmp(buffer,"")) {
+        buffer[strlen(buffer)-1] = '\0';
+    }
     if(buffer[0] == ' '|| buffer[strlen(buffer)-1] == ' ') {
         return ":invalid\n";
     }
@@ -362,15 +357,11 @@ char* instructionAnalysis(char* buffer, WordList* words) {
     if (tokenCount != 3) {
         return ":invalid\n"; // empty string mean error
     }
-    //fprintf(stdout,"token[0] = %s\n token[1] = %s\n token[2] = %s", token[0], token[1], token[2]);
-    //fflush(stdout);
     if (strcmp(token[0], "crack") == 0) {
         char* salt = salt_extract(token);
         buffer = brute_force_cracker(token[1], salt, *words, token[2]);
     } else if (strcmp(token[0], "crypt") == 0) {
         if (!valid_salt(token[2])) {
-            //fprintf(stdout,"invalid instruction 2\n");
-            //fflush(stdout);
             return ":invalid\n";
         }
         //get 8 first characters of plain text if it is longer than 8
@@ -392,29 +383,20 @@ void* client_thread(void* ClientPtr) {
     Client client = *(Client*)ClientPtr;
     free(ClientPtr);
 
-    char* buffer = malloc(sizeof(char)*1024);
-    ssize_t numBytesRead;
+    char* buffer;
     // Repeatedly read data arriving from client - turn it to 
     // upper case - send it back to client
-    for(; (numBytesRead = read(client.fd, buffer, 1024)) > 0;) {
-        //capitalise(buffer, numBytesRead);
+    for(;(buffer = read_line(client.clientFile));) {
         char* result = instructionAnalysis(buffer, &(client.words));
-        write(client.fd, result, strlen(result)*sizeof(char));
+        fputs(result,client.clientFile);
+        fflush(client.clientFile); // flush to client
         if (result != NULL 
                 && strcmp(result, ":failed\n") != 0
                 && strcmp(result, ":invalid\n") != 0) {
             free(result);
         }
         free(buffer);
-        buffer = malloc(sizeof(char)*1024);
     }
-    // error or EOF - client disconnected
-
-    if(numBytesRead < 0) {
-        perror("Error reading from socket");
-        exit(1);
-    }
-    // Print a message to server's stdout
     close(client.fd);
     return NULL;
 }
@@ -445,16 +427,14 @@ void process_connections(int fdServer, WordList words) {
         }
 
     Client* client = malloc(sizeof(Client));
+    //client->fd = fd;
+    client->clientFile = fdopen(fd, "r+");
     client->fd = fd;
-    int fd2 = dup(fd);
-    client->toClient = fdopen(fd2, "w");
-    close(fd2);
     client->words = words;
 
 	pthread_t threadId;
 	pthread_create(&threadId, NULL, client_thread, client);
 	pthread_detach(threadId); // need to join later
-    fclose(client->toClient);
     }
 }
 
@@ -471,9 +451,7 @@ int main(int argc, char** argv) {
     fclose(dictionary);
 
     int fdServer = open_listen(para.port, para.maxconnections);
-    //sem_init(&sem, 0,1);
     process_connections(fdServer, words);
     free(words.wordArray);
-    //sem_destroy(&sem);
     return 0;
 }
