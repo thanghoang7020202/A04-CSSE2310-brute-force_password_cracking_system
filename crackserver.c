@@ -24,54 +24,104 @@
 #define WORD_BUFFER_SIZE 51
 #define MAX_WORD_LEN 8
 #define CIPHERTEXT_LEN 13
+#define PLAINTEXT_LEN 8
 
+/*
+ * struct CmdArg is used to store the information of command line arguments
+ * including the maximum number of connections, the port number and the
+ * dictionary file name.
+ */
 typedef struct CmdArg {
     unsigned int maxconnections;
     char* port;
     char* dictionary;
 } CmdArg;
 
+/*
+ * struct WordList is used to store the information of a word list
+ * including the number of words and the array of words.
+ */
 typedef struct {
     int numWords;
     char** wordArray;
 } WordList;
 
+/*
+ * struct Client is used to store the information of a client
+ * including the file descriptor, the file pointer and the word list
+ * which be used to pass to the client thread function.
+ */
 typedef struct {
     int fd;
     FILE* clientFile;
     WordList words;
 } Client;
 
+/*
+ * The resource struct is used to pass information
+ * to the sub-threads (worker) to run the crack function
+ * on the dictionary from index start to end.
+ */
 typedef struct {
     char* salt;
-    char* password;
+    char* password; // plain text
     WordList words;
     int start; // range in dictionary
     int end;
     char* result;
 } Resource;
 
+/*
+ * exit_code_one()
+ * -----------------------
+ * Prints an error message and exits the program with exit code 1.
+ */
 void exit_code_one() {
     fprintf(stderr, "Usage: crackserver [--maxconn connections]" 
             " [--port portnum] [--dictionary filename]\n");
     exit(1);
 }
 
+/*
+ * exit_code_two()
+ * -----------------------
+ * Prints an error message and exits the program with exit code 2.
+ */
 void exit_code_two(char* filename) {
-    fprintf(stderr, "crackserver: unable to open dictionary file \"%s\"\n", filename);
+    fprintf(stderr, "crackserver: unable to open dictionary file"
+            " \"%s\"\n", filename);
     exit(2);
 }
 
+/*
+ * exit_code_three()
+ * -----------------------
+ * Prints an error message and exits the program with exit code 3.
+ */
 void exit_code_three() {
     fprintf(stderr, "crackserver: no plain text words to test\n");
     exit(3);
 }
 
+/*
+ * exit_code_four()
+ * -----------------------
+ * Prints an error message and exits the program with exit code 4.
+ */
 void exit_code_four() {
     fprintf(stderr, "crackserver: unable to open socket for listening\n");
     exit(4);
 }
 
+/*
+ * valid_port()
+ * -----------------------
+ * Checks the string is a valid port number or not.
+ * 
+ * salt: a string to be checked
+ * 
+ * Returns: 1 if the string is a valid port number, 0 otherwise
+ */
 int valid_salt(char* salt) {
     if (strlen(salt) != 2) {
         return 0; // 0 means invalid
@@ -86,10 +136,19 @@ int valid_salt(char* salt) {
     return flag;
 }
 
+/*
+ * valid_plain_text()
+ * -----------------------
+ * Checks the string is a valid plain text or not.
+ * 
+ * plainText: a string to be checked
+ * 
+ * Returns: a valid plain text
+ */
 char* valid_plain_text(char* plainText) {
     if (strlen(plainText) > 8) {
         //return a first 8 characters
-        char* validText = malloc(sizeof(char)*9); 
+        char* validText = malloc(sizeof(char) * 9); 
         strncpy(plainText, validText, 8);
         validText[8] = '\0'; // add end of string
         return validText;
@@ -97,15 +156,36 @@ char* valid_plain_text(char* plainText) {
     return plainText;
 }
 
+/*
+ * valid_integer()
+ * -----------------------
+ * Checks the string is a valid integer or not.
+ * 
+ * connection: a string to be checked
+ * 
+ * Returns: 1 if the string is a valid integer, 0 otherwise
+ */
 int valid_integer(char* connection) {
     for (int i = 0; i < strlen(connection); i++) {
-        if(!isdigit(connection[i])) {
+        if (!isdigit(connection[i])) {
             return 0; // 0 means invalid
         }
     }
     return 1; // 1 means valid
 }
 
+/*
+ * re_update_parameter()
+ * -----------------------
+ * Checks the command line arguments for validity. If the arguments
+ * are valid, the function returns a CmdArg structure containing the
+ * values of the arguments.
+ * 
+ * parameters: a CmdArg structure containing the values of the arguments
+ * (look at the definition of CmdArg)
+ * 
+ * Returns: a CmdArg structure containing the values of the arguments
+ */
 CmdArg re_update_parameter(CmdArg parameters) {
     if (parameters.port == NULL) {
         parameters.port = "0";
@@ -119,7 +199,25 @@ CmdArg re_update_parameter(CmdArg parameters) {
     return parameters;
 } 
 
-/*https://stackoverflow.com/questions/44330230/how-do-i-get-a-negative-value-by-using-atoi*/
+/*
+ * pre_run_checking()
+ * -----------------------
+ * Checks the command line arguments for validity. If the arguments
+ * are valid, the function returns a CmdArg structure containing the
+ * values of the arguments. 
+ * 
+ * argc: the number of command line arguments
+ * argv: the array of command line arguments
+ * 
+ * Returns: a CmdArg structure containing the values of the arguments
+ * 
+ * Errors: If the arguments are invalid, the function prints an error message
+ *  and exits the program with exit
+ * code 1.
+ * 
+ * REF: https://stackoverflow.com/questions/44330230/
+ *      how-do-i-get-a-negative-value-by-using-atoi
+ */
 CmdArg pre_run_checking(int argc, char* argv[]) {
     CmdArg parameters;
     parameters.maxconnections = -1; // -1 means not set yet
@@ -133,7 +231,7 @@ CmdArg pre_run_checking(int argc, char* argv[]) {
     }
     for (int i = 1; i < argc; i++) { // check all the arguments
         if (!strcmp(argv[i], "--maxconn") 
-            && parameters.maxconnections == -1) {
+                && parameters.maxconnections == -1) {
             i++; // get next value
             if (strstr(argv[i], "-")
                     || !valid_integer(argv[i])) {
@@ -149,7 +247,7 @@ CmdArg pre_run_checking(int argc, char* argv[]) {
             i++; // get next value
             unsigned int portNum = atoi(argv[i]);
             if (!(portNum > MIN_PORT_NUM && portNum < MAX_PORT_NUM) 
-            && portNum != 0) {
+                    && portNum != 0) {
                 //if not in range
                 exit_code_one();
             }
@@ -169,7 +267,20 @@ CmdArg pre_run_checking(int argc, char* argv[]) {
     return parameters;
 }  
 
-// ref: from csse2310 assignment 1 solution code
+/*
+ * add_word_to_list()
+ * -----------------------
+ * Adds the given word to the given list of words. The list of words
+ * is stored in a WordList structure. (See the comment above the
+ * WordList type)
+ * 
+ * words: The list of words to add the word to
+ * word: The word to add to the list
+ * 
+ * returns: The updated list of words
+ * 
+ * REF: csse2310 assignment 1 solution code
+ */
 WordList add_word_to_list(WordList words, char* word) {
     char* wordCopy;
 
@@ -185,7 +296,22 @@ WordList add_word_to_list(WordList words, char* word) {
     return words;
 }
 
-// ref: from csse2310 assignment 1 solution code
+/*
+ * read_dictionary()
+ * -----------------------
+ * Reads a dictionary from the given file stream, and returns a list
+ * of words in the dictionary. If the dictionary file contains a word 
+ * longer than 8 characters, it will be ignored. 
+ * 
+ * fileStream: A file stream to read the dictionary from.
+ * 
+ * Returns: A WordList structure containing the words in the dictionary.
+ *          (See the comment above the WordList type)
+ * Errors:  If the dictionary file cannot be opened, the program will
+ *         print an error message to stderr and exit with exit code 3.
+ *  
+ * REF: from csse2310 assignment 1 solution code
+ */
 WordList read_dictionary(FILE* fileStream) {
     WordList validWords;
     char* currentWord = NULL; 	// Buffer to hold word.
@@ -214,7 +340,17 @@ WordList read_dictionary(FILE* fileStream) {
     return validWords;
 }
 
-// Listens on given port. Returns listening socket (or exits on failure)
+/*
+ * open_listen()
+ * --------------------
+ * Open a listening socket on the specified port. Returns the file
+ * descriptor of the listening socket.
+ * 
+ * port: The port number to listen on.
+ * maxconnections: The maximum number of connections to accept.
+ * 
+ * Returns: The file descriptor of the listening socket.
+ */
 int open_listen(const char* port, int maxconnections) {
     struct addrinfo* ai = 0;
     struct addrinfo hints;
@@ -234,29 +370,28 @@ int open_listen(const char* port, int maxconnections) {
 
     // Allow address (port number) to be reused immediately
     int optVal = 1;
-    if(setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, 
-                &optVal, sizeof(int)) < 0) {
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, 
+            &optVal, sizeof(int)) < 0) {
         close(listenfd);
         exit_code_four(); //Error setting socket option
     }
 
-    if(bind(listenfd, ai->ai_addr, sizeof(struct sockaddr)) < 0) {
+    if (bind(listenfd, ai->ai_addr, sizeof(struct sockaddr)) < 0) {
         close(listenfd);
         exit_code_four(); // Could not bind to address
     }
     // get port number
     struct sockaddr_in ad;
     memset(&ad, 0, sizeof(struct sockaddr_in));
-    socklen_t len=sizeof(struct sockaddr_in);
+    socklen_t len = sizeof(struct sockaddr_in);
     if (getsockname(listenfd, (struct sockaddr*)&ad, &len)) {
         close(listenfd);
         exit_code_four(); // getsockname failed
     }
     // extract port number to stderr
-    fprintf(stderr,"%u\n", ntohs(ad.sin_port));
+    fprintf(stderr, "%u\n", ntohs(ad.sin_port));
     fflush(stderr);
-
-    if(listen(listenfd, maxconnections) < 0) { // listen for connections
+    if (listen(listenfd, maxconnections) < 0) { // listen for connections
         close(listenfd);
         exit_code_four(); // Could not listen on socket
     }
@@ -265,11 +400,21 @@ int open_listen(const char* port, int maxconnections) {
     return listenfd;
 }
 
-char* salt_extract(char** token) {
+/*
+ * salt_extractor()
+ * ----------------------------------
+ * This function is used to extract the salt from the ciphertext.
+ * If the salt is invalid, it will return ":invalid\n".
+ * 
+ * token: the tokenized string
+ * 
+ * return: the salt
+ */
+char* salt_extractor(char** token) {
     // token[0] = "crack"
     // token[1] = ciphertext
     // token[2] = maxconnections
-    char* salt = malloc(sizeof(char)*2);
+    char* salt = malloc(sizeof(char) * 2);
     if (strlen(token[1]) != CIPHERTEXT_LEN 
             || !valid_integer(token[2])
             || atoll(token[2]) < MIN_CONNECTIONS 
@@ -285,7 +430,19 @@ char* salt_extract(char** token) {
     return salt;
 }
 
-//ref: https://stackoverflow.com/questions/9335777/crypt-r-example
+/*
+ * finder()
+ * ----------------------------------
+ * This function is used to find the password from the dictionary.
+ * If the password is found, it will return the password, otherwise
+ * it will return ":failed\n".
+ * 
+ * resource: the struct that contains the information needed to find
+ * the password. (look at the struct Resource)
+ * 
+ * Returns: the password or ":failed\n"
+ * ref: https://stackoverflow.com/questions/9335777/crypt-r-example
+ */
 void* finder(void* resource) {
     Resource* res = (Resource*)resource;
     for (int i = res->start; i <= res->end; i++) {
@@ -295,7 +452,7 @@ void* finder(void* resource) {
         if (strcmp(res->password, libPass) == 0) {
             char* result = strdup(res->words.wordArray[i]);
             result = strcat(result, "\n");
-            res->result = malloc(sizeof(char)*strlen(result));
+            res->result = malloc(sizeof(char) * strlen(result));
             res->result = result;
             return NULL;
         }
@@ -304,26 +461,40 @@ void* finder(void* resource) {
     return NULL;  
 }
 
-char* brute_force_cracker(char* password, char* salt, WordList words, char* nthread) {
+/*
+ * brute_force_cracker()
+ * ----------------------------------
+ * This function is used to crack the password by brute force.
+ * 
+ * password: the password to be cracked
+ * salt: the salt of the password
+ * words: the wordlist (dictionary)
+ * nthread: the number of threads to be used
+ * 
+ * return: the cracked password
+ */
+char* brute_force_cracker(char* password, 
+        char* salt, WordList words, char* nthread) {
     if (strcmp(salt, ":invalid\n") == 0) {
         return ":invalid\n";
     }
     //create resource    
     int numThread = 
-        (nthread == NULL || words.numWords < atoll(nthread))? 1: atoll(nthread);
-    int perThread = (int) (words.numWords / numThread); // round down
+            (nthread == NULL 
+            || words.numWords < atoll(nthread))? 1: atoll(nthread);
+    int perThread = (int)(words.numWords / numThread); // round down
     int remainder = words.numWords % numThread;
     Resource resource[numThread];
     //create thread
-    pthread_t* threadId = malloc(sizeof(pthread_t)*numThread);
+    pthread_t* threadId = malloc(sizeof(pthread_t) * numThread);
 
-    for(int i = 0; i < numThread; i++) {
+    for (int i = 0; i < numThread; i++) {
         //initialize starting and ending index
         resource[i].salt = salt;
         resource[i].words = words;
         resource[i].password = password;
         resource[i].start = i * perThread;
-        resource[i].end = ((i+1) * perThread) - 1;
+        resource[i].end = ((i + 1) * perThread) - 1;
         if (i == numThread - 1) {
             resource[i].end += remainder;
         }
@@ -333,7 +504,7 @@ char* brute_force_cracker(char* password, char* salt, WordList words, char* nthr
     for (int i = 0; i < numThread; i++) {
         pthread_join(threadId[i], NULL);
         if (strcmp(resource[i].result, ":failed\n") != 0) {
-            for(int j = i + 1; j < numThread; j++) {
+            for (int j = i + 1; j < numThread; j++) {
                 if (i != j) {
                     pthread_detach(threadId[j]);
                 }
@@ -344,12 +515,24 @@ char* brute_force_cracker(char* password, char* salt, WordList words, char* nthr
     return ":failed\n";
 }
 
-char* instructionAnalysis(char* buffer, WordList* words) {
+/*
+ * instruction_analyst()
+ * --------------------------------------
+ * This function will analyze the instruction and call the corresponding
+ * function to execute the instruction.
+ * 
+ * buffer: the instruction to be analyzed
+ * words: the wordlist (dictionary)
+ * 
+ * Returns: the result of the instruction in from of a string
+ * with \n at the end
+ */
+char* instruction_analyst(char* buffer, WordList* words) {
     //replace \n at the end with end of string
-    if(buffer != NULL && !strcmp(buffer,"")) {
-        buffer[strlen(buffer)-1] = '\0';
+    if (buffer != NULL && !strcmp(buffer, "")) {
+        buffer[strlen(buffer) - 1] = '\0';
     }
-    if(buffer[0] == ' '|| buffer[strlen(buffer)-1] == ' ') {
+    if (buffer[0] == ' ' || buffer[strlen(buffer) - 1] == ' ') {
         return ":invalid\n";
     }
     int tokenCount = 0;
@@ -358,7 +541,7 @@ char* instructionAnalysis(char* buffer, WordList* words) {
         return ":invalid\n"; // empty string mean error
     }
     if (strcmp(token[0], "crack") == 0) {
-        char* salt = salt_extract(token);
+        char* salt = salt_extractor(token);
         buffer = brute_force_cracker(token[1], salt, *words, token[2]);
     } else if (strcmp(token[0], "crypt") == 0) {
         if (!valid_salt(token[2])) {
@@ -379,16 +562,28 @@ char* instructionAnalysis(char* buffer, WordList* words) {
     return buffer;
 }
 
-void* client_thread(void* ClientPtr) {
-    Client client = *(Client*)ClientPtr;
-    free(ClientPtr);
+/*
+ * client_thread()
+ * --------------------------------------
+ * Thread function that handles all communication with a client once
+ * a connection has been established.  This function should repeatedly
+ * read a line of input (plain text) from the client and crypt 
+ * or crack the pain text.
+ * 
+ * args: clientPtr - a pointer to a Client struct containing the client's
+ *                  file descriptor and the word list.
+ * Returns: NULL (this return value is ignored)
+ */
+void* client_thread(void* clientPtr) {
+    Client client = *(Client*)clientPtr;
+    free(clientPtr);
 
     char* buffer;
     // Repeatedly read data arriving from client - turn it to 
     // upper case - send it back to client
-    for(;(buffer = read_line(client.clientFile));) {
-        char* result = instructionAnalysis(buffer, &(client.words));
-        fputs(result,client.clientFile);
+    for (; (buffer = read_line(client.clientFile));) {
+        char* result = instruction_analyst(buffer, &(client.words));
+        fputs(result, client.clientFile);
         fflush(client.clientFile); // flush to client
         if (result != NULL 
                 && strcmp(result, ":failed\n") != 0
@@ -401,18 +596,29 @@ void* client_thread(void* ClientPtr) {
     return NULL;
 }
 
+/*
+ * process_connections()
+ * --------------------------------------
+ * Process incoming connections on the given server socket.  This function
+ * will block until a connection is received.  Once a connection is received,
+ * a new thread will be created to process the connection and this function
+ * will go back to waiting for another connection.
+ * 
+ * fdServer: the file descriptor of the server socket
+ * words: the list of words to use for cracking
+ */
 void process_connections(int fdServer, WordList words) {
     int fd;
     struct sockaddr_in fromAddr;
     socklen_t fromAddrSize;
 
     // Repeatedly accept connections and process data (capitalise)
-    while(1) {
+    for (; 1;) {
         fromAddrSize = sizeof(struct sockaddr_in);
 	// Block, waiting for a new connection. (fromAddr will be populated
 	// with address of client)
-        fd = accept(fdServer, (struct sockaddr*)&fromAddr,  &fromAddrSize);
-        if(fd < 0) {
+        fd = accept(fdServer, (struct sockaddr*) &fromAddr, &fromAddrSize);
+        if (fd < 0) {
             perror("Error accepting connection");
             exit(1);
         }
@@ -422,15 +628,15 @@ void process_connections(int fdServer, WordList words) {
         char hostname[NI_MAXHOST];
         int error = getnameinfo((struct sockaddr*)&fromAddr, 
                 fromAddrSize, hostname, NI_MAXHOST, NULL, 0, 0);
-        if(error) {
+        if (error) {
             exit_code_four();
         }
 
-    Client* client = malloc(sizeof(Client));
-    //client->fd = fd;
-    client->clientFile = fdopen(fd, "r+");
-    client->fd = fd;
-    client->words = words;
+        Client* client = malloc(sizeof(Client));
+        //client->fd = fd;
+        client->clientFile = fdopen(fd, "r+");
+        client->fd = fd;
+        client->words = words;
 
 	pthread_t threadId;
 	pthread_create(&threadId, NULL, client_thread, client);
@@ -439,7 +645,7 @@ void process_connections(int fdServer, WordList words) {
 }
 
 int main(int argc, char** argv) {
-    CmdArg para = pre_run_checking(argc,argv);
+    CmdArg para = pre_run_checking(argc, argv);
     
     //open dictionary to read
     FILE* dictionary = fopen(para.dictionary, "r");
